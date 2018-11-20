@@ -1,0 +1,366 @@
+## Simulating N(t) and and SDE approximation to S(t)
+#dS(t) = (lambda(S) - mu(S)) dt + sqrt(lambda(S) mu(S))dW(t)
+#Sn+1 = Sn + Delta (lambda(Sn) - mu(Sn))Delta + sqrt(lambda(Sn) mu(Sn) Delta)N(0,1)
+par(mfcol = c(2,1), mar = c(5,4,1,1))
+
+flag_BMsim = 1
+
+#------------------------------------------------------------
+### Parameters to pick
+#------------------------------------------------------------
+
+
+T_max = 60*(20/3600)
+time_vec = time
+
+Nstar = 200
+Aendo = 0.2 ; Aexo = 0.1
+Ab_conc = Aendo + Aexo
+Thresh_low = 10; Thresh_high = 20;
+Thresh = c(Thresh_low, Thresh_high); num_Ts = length(Thresh)
+mod_c = 10
+
+
+S_time_step = 0.001
+
+mycolors = c("slateblue3", "dodgerblue3", "springgreen3", "firebrick3")
+
+#------------------------------------------------------------
+### Known/assumed parameters
+#------------------------------------------------------------
+N_mean = Nstar*((Ab_conc*kon)/(Ab_conc*kon + koff))
+S_mean = N_mean*((monM*mod_c)/(monM*mod_c + moff))
+
+kon_units = 4.26*10^4
+units_conv = 0.75*10^(-8)
+
+koff = 2.87*10^(-4)
+kon = (kon_units*units_conv)
+
+
+moff = 100; knockdown_factor = 0.9
+monM = ((1 - knockdown_factor)/knockdown_factor)* moff
+
+#------------------------------------------------------------
+### Functions
+#------------------------------------------------------------
+
+lambda_s = function(s,n, Thresh, mod_c){
+	imm_ind = as.numeric(s >= Thresh)
+	lambda_s = (n-s)*monM*(1*(1-imm_ind)+ mod_c*imm_ind)*as.numeric(s<= n)
+	return(lambda_s)
+}
+
+mu_s = function(s,n){
+	return(s*moff*as.numeric(n>0))
+}
+
+smoothing_average = function(Xn,index, window){
+	return(mean(Xn[max(index-window, 1):(min(index+window, length(Xn)))]))	
+}
+
+
+interval_index_fnc = function(bds, time_seq){
+	if(bds[1] <max(time_seq) && bds[2] > max(time_seq)){
+		(which(bds[1] == time_seq)):length(time_seq)
+	}else if( bds[1] >max(time_seq) && bds[2] > max(time_seq)){
+		return()
+	}else{
+		(which(bds[1] == time_seq)):(which(bds[2] == time_seq))
+	}
+}
+	
+row_to_list = function(matrix){
+	lapply(seq_len(nrow(matrix)), function(i) matrix[i,] )
+}
+
+
+
+get_points = function(bds, num_steps){
+	not_quite = seq(bds[1], bds[2], length = num_steps+2 )
+	return(c(not_quite[-c(1, num_steps + 2)],not_quite[num_steps+2] - 10^-9 ))
+}
+#------------------------------------------------------------
+### Initialization 
+#------------------------------------------------------------
+n = 0; s= 0
+#n = 60; s= 19
+#n = N_mean; s = S_mean
+n = N_mean; s = 0
+N_vec = n ;S_vec = matrix(rep(s,2), nrow = 1)
+
+
+plot(1:T_max/(3600), 1:T_max/3600, ylim = range(0, Nstar), type = 'n', xlab = 'Time (hours)', ylab = "Number Bound Ab", xlim = c(0,T_max/3600), yaxt = 'n')
+axis(2, at = seq(0,Nstar, by = 20), labels = c(seq(0, Nstar/2 -20, by = 20), paste(Nstar/2,"/0"),seq(20, Nstar/2, by = 20)), las = 1)
+
+title(paste("Nstar =", Nstar, ", Ab exo =  ", Aexo,", c = ", mod_c))
+legend("top", ncol = 3, legend= c("N(t)", paste("S(t)|T = ",Thresh_low, sep = ""),paste("S(t)|T = ",Thresh_high, sep ="")), col = mycolors[c(1,3,2)], lty = 1)
+
+it = 1; time = 0;
+
+imm_time_range = list(); to_zoom = list()
+for(k in 1:num_Ts){
+	imm_time_range[[k]] = c(0,0)
+}
+#------------------------------------------------------------
+### Start of the simulation
+#------------------------------------------------------------
+
+
+while(time < T_max){
+
+it = it+1
+Nfor = (Nstar - n)*kon*Ab_conc
+Nback = n*koff
+
+N_rates = Nfor + Nback
+
+N_tau = rexp(n = 1,N_rates)
+if(runif(1) <= Nfor/N_rates){
+	N_vec[it] = n+1  
+	n = N_vec[it]
+}else{
+	N_vec[it] = n-1
+	n = N_vec[it]
+}
+
+
+
+ #Sn + Delta (lambda(Sn) - mu(Sn))Delta + sqrt(lambda(Sn) mu(Sn) Delta)N(0,1)
+
+num_iter = floor(N_tau/S_time_step)
+
+
+s_vec = matrix(nrow = num_iter+1, ncol = num_Ts)
+s_vec[1,] = sapply(S_vec[it-1,], function(x){min(x, N_vec[it])})
+
+
+
+for(j in 1:num_iter){
+		
+		for(k in 1:num_Ts){
+		
+		s_vec[j+1,k] =s_vec[j,k]+S_time_step*(lambda_s(s = s_vec[j,k], n = N_vec[it], Thresh = Thresh[k], mod_c = mod_c) - mu_s(s=s_vec[j,k], n=N_vec[it] ))+sqrt(S_time_step*(lambda_s(s = s_vec[j,k], n = N_vec[it], Thresh = Thresh[k], mod_c = mod_c) + mu_s(s=s_vec[j,k], n=N_vec[it] )))*rnorm(1,0,1)
+				
+		if(s_vec[j+1,k]< 0){s_vec[j+1,k] = 0}
+		if(s_vec[j+1,k]> N_vec[it]){s_vec[j+1,k] = N_vec[it]}
+		
+		}
+		
+		
+		
+	}
+
+
+last_s_delta = (N_tau-num_iter*S_time_step)
+
+for(k in 1:num_Ts){
+s_vec[num_iter + 1,k] =  s_vec[num_iter,k]+S_time_step*(lambda_s(s = s_vec[num_iter,k], n = N_vec[it], Thresh = Thresh[k], mod_c = mod_c) - mu_s(s=s_vec[num_iter,k], n=N_vec[it] ))+sqrt(S_time_step*(lambda_s(s = s_vec[num_iter,k], n = N_vec[it], Thresh = Thresh[k], mod_c = mod_c) + mu_s(s=s_vec[num_iter,k], n=N_vec[it] )))*rnorm(1,0,1)
+
+if(s_vec[num_iter + 1,k]< 0){s_vec[num_iter + 1,k] = 0}
+if(s_vec[num_iter + 1,k]> N_vec[it]){s_vec[num_iter + 1,k] = N_vec[it]}
+
+
+} # end of the Ts loop
+
+S_vec = rbind(S_vec, s_vec[num_iter + 1, ])
+
+
+
+##----------------------------------------------
+#plotting
+##-------------------------------------------------
+subseq_index = c(seq(1, num_iter +1, by = 1), num_iter+1)
+
+
+time_s_vec = (time/3600) + cumsum(c(rep(S_time_step, times = num_iter),(N_tau-num_iter*S_time_step)))/3600
+
+lines(time_s_vec[subseq_index], s_vec[subseq_index,1], col = mycolors[3], type = 'l', lty = 1, cex = 0.5)
+lines(seq(time/3600, (N_tau+time)/3600,length = 100), rep(n, times = 100), col = mycolors[1], lwd = 2.5)
+
+
+
+lines(time_s_vec[subseq_index], s_vec[subseq_index,2]+Nstar/2, col = mycolors[2], type = 'l', cex = 0.5)
+lines(seq(time/3600, (N_tau+time)/3600,length = 100), rep(n+Nstar/2, times = 100), col = mycolors[1], lwd = 2.5)
+
+
+##----------------------------------------------
+#Checking for switches
+##-------------------------------------------------
+for(k in 1:num_Ts){
+
+imm_state_index = which(s_vec[,k] >=Thresh[k])
+
+if(length(imm_state_index)> 0){
+	if(length(imm_state_index)==1){
+		imm_time_range[[k]] = rbind(imm_time_range[[k]],rep(time_s_vec[imm_state_index], 2))
+	}else if(length(unique(diff(imm_state_index))) == 1){
+		## if there is only one immobilized switch during the interval		
+		if(length(imm_state_index) == length(time_s_vec)){
+			imm_time_range[[k]] = imm_time_range[[k]]
+			#print("case0")
+		}else if (imm_state_index[1]==1 && S_vec[it-1,k]>= Thresh[k]){
+			imm_time_range[[k]][nrow(imm_time_range[[k]]),2] = time_s_vec[max(imm_state_index)]
+			#print('case1')
+		}else{
+			imm_time_range[[k]] = rbind(imm_time_range[[k]], time_s_vec[range(imm_state_index)])	
+			#print('case2')	
+			}
+	}else{
+## Multiple switches
+	if( imm_state_index[1]==1 &&  S_vec[it-1, k] >= Thresh[k]){
+		imm_time_range[[k]][nrow(imm_time_range[[k]]),2] = time_s_vec[which(diff(imm_state_index)>1)[1]]	
+		
+		new_states_index  = c(which(diff(imm_state_index)>1), length(imm_state_index))
+	}else{
+		new_states_index  = c(0,which(diff(imm_state_index)>1), length(imm_state_index))
+	}
+	
+	
+	
+	for(st in 1:(length(new_states_index)-1)){
+		state_range = (new_states_index[st]+1):new_states_index[st+1]
+		imm_time_range[[k]] = rbind(imm_time_range[[k]] ,range(time_s_vec[imm_state_index[state_range]]))	
+	} # End of multiple switches
+	
+	to_zoom[[k]] = list(time = time_s_vec, s_vec = s_vec[,k], N = n)
+	#print('multiple switch')
+	} #end of the check time_range
+#print(imm_time_range[[k]][nrow(imm_time_range[[k]]),])	
+
+} #End of an immobilized state
+
+} #end of the go through Ts
+
+
+time = time+ N_tau
+time_vec = c(time_vec, time)
+
+
+} #end of the simualtion loop
+
+
+
+abline(h = Thresh[2]+Nstar/2, lty = 2, col = mycolors[2], lwd = 2)
+abline(h = Thresh[1], lty = 2, col = mycolors[3], lwd = 2)
+abline(h = Nstar/2, lty = 1)
+
+#abline(v = imm_time_range[[1]], lty = 4, col = "red")
+
+
+##==============================================
+## For BM trajectories
+##==============================================
+
+
+if(flag_BMsim == 1){
+
+time_seq = list(); BM_vec = list(); max_BM = c(); Xn_k = list()
+
+for(k in 1:num_Ts){
+imm_state_index = which(s_vec[,k] >=Thresh[k])
+
+if(length(imm_state_index)> 0){
+	if(length(unique(diff(imm_state_index))) == 1){
+		## if there is only one immobilized switch during the interval		
+		if(length(imm_state_index) == length(time_s_vec)){imm_time_range[[k]][nrow(imm_time_range[[k]]),2] = time_s_vec[max(imm_state_index)]}}
+}
+
+if(length(imm_time_range[[k]])>2){
+	free_periods= cbind(imm_time_range[[k]][-1,1],imm_time_range[[k]][-nrow(imm_time_range[[k]]),2])
+	free_time = unlist(lapply(row_to_list(free_periods), get_points, num_steps = 3))
+}else{
+	free_time = 0
+	}
+time_seq_all= unique(sort(c(free_time,imm_time_range[[k]],seq(0, T_max/3600, length = 500), T_max/3600 + (1/3600) )))
+
+
+time_seq[[k]] = time_seq_all[-which(time_seq_all > T_max/3600)]
+
+
+BM_vec[[k]] = sapply(sqrt(diff(time_seq[[k]])),rnorm, n = 1 ,mean = 0)
+max_BM = c(max_BM,max(abs(cumsum(BM_vec[[k]]))))
+
+}
+
+
+plot(c(0, T_max/3600),c(0, T_max/3600) , type = 'n',xlab = "Time (hours)", ylab = "Virion Position", ylim = c(-1,1)*max(max_BM), xlim = c(0,T_max/3600))
+
+col_index = 4
+
+for(k in 1:num_Ts){
+col_index = col_index - 1
+
+imm_index_vec= rep(1,times = length(time_seq[[k]]))
+
+
+#if(length(imm_time_range[[k]]) > 2){
+
+if(is.matrix(imm_time_range[[k]]) == FALSE){imm_time_range[[k]] = matrix(imm_time_range[[k]],nrow = 1)}
+
+immobilized_periods = lapply(row_to_list(imm_time_range[[k]]), interval_index_fnc, time_seq = time_seq[[k]])
+
+null_index = c(1,which(sapply(immobilized_periods, is.null) == TRUE))
+immobilized_periods= immobilized_periods[-null_index]
+
+
+if(length((immobilized_periods)) >0){
+for(ll in 1:length(immobilized_periods)){
+	imm_index_vec[immobilized_periods[[ll]]] = 0	
+}
+}
+
+
+ Xn = c(0,cumsum(imm_index_vec[-1]*BM_vec[[k]]))
+
+ lines(time_seq[[k]], Xn, type = 'l',xlab = "Time (hours)", ylab = "Virion Position",  col = mycolors[col_index])
+
+
+if(length((immobilized_periods)) >0){
+	for(ll in 1:length(immobilized_periods)){
+		lines(time_seq[[k]][immobilized_periods[[ll]]], Xn[immobilized_periods[[ll]]], col = 'firebrick3')
+	}
+}
+Xn_k[[k]] = Xn
+
+} # End of the multiple Ts
+
+
+
+
+
+
+
+} #End of flag BM
+
+
+dev.new()
+par(mfcol = c(2,1), mar = c(5,4,1,1))
+
+if(length(to_zoom) >0){
+k = 1
+
+good_times = which(to_zoom[[k]]$time < T_max/3600)
+
+
+plot(to_zoom[[k]]$time[good_times]*3600, to_zoom[[k]]$s_vec[good_times], col = "springgreen3", type = 'l', xlab = "Time (s)", ylab = "Number of Ab Bound", ylim = range(c(to_zoom[[k]]$s_vec, to_zoom[[k]]$N)))
+title(paste("Nstar =", Nstar, ", Ab exo =  ", Aexo,", c = ", mod_c))
+lines(to_zoom[[k]]$time*3600, rep(to_zoom[[k]]$N, times = length(to_zoom[[k]]$time)), col = "dodgerblue3", lwd = 2.5)
+abline(h = Thresh[[k]], lty = 2, col = mycolors[k+2])
+
+zoom_time_range = range(to_zoom[[k]]$time)
+zoom_index =which(time_seq[[k]] >= zoom_time_range[1])
+
+plot(time_seq[[k]][zoom_index]*3600,Xn_k[[k]][zoom_index]  , type = 'l',xlab = "Time (seconds)", ylab = "Virion Position", col = mycolors[k+2],xlim = range(to_zoom[[k]]$time[good_times]*3600))
+
+
+
+
+}
+
+
+# # 
+# plot(time_s_vec*3600, s_vec, col = "springgreen3", type = 'l', xlab = "Time (s)", ylab = "Number of Ab Bound", ylim = range(c(s_vec, n, Thresh)))
+# title(paste("Nstar =", Nstar, ", Ab exo =  ", Aexo,", c = ", mod_c))
+# lines(time_s_vec*3600, rep(n, times = length(time_s_vec)), col = "dodgerblue3", lwd = 2.5)
+# abline(h = Thresh, lty = 2)
